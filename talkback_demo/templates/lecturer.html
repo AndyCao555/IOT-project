@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TalkBack - Lecturer</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 820px; margin: 24px auto; padding: 0 16px; }
+    button { font-size: 18px; padding: 10px 14px; margin-right: 8px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 12px 0; }
+    table { width:100%; border-collapse: collapse; }
+    td, th { border-bottom: 1px solid #eee; padding: 8px; text-align:left; }
+  </style>
+</head>
+<body>
+  <h1>TalkBack (Lecturer)</h1>
+
+  <div class="card row">
+    <button id="btnStart">Start Q&A</button>
+    <button id="btnStop">Stop Q&A</button>
+    <button id="btnNext">Next (Play)</button>
+    <span id="state"></span>
+  </div>
+
+  <div class="card">
+    <h3>Queue</h3>
+    <table>
+      <thead><tr><th>#</th><th>Name</th><th>ID</th><th>Status</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Now playing</h3>
+    <p id="now"></p>
+    <audio id="player" controls></audio>
+  </div>
+
+  <script>
+    const stateEl = document.getElementById('state');
+    const tbody = document.getElementById('tbody');
+    const player = document.getElementById('player');
+    const now = document.getElementById('now');
+
+    async function refresh() {
+      const r = await fetch('/queue');
+      const j = await r.json();
+      stateEl.textContent = j.accepting ? "Accepting: ON" : "Accepting: OFF";
+      tbody.innerHTML = "";
+      j.items.forEach((it, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${idx+1}</td><td>${it.name}</td><td>${it.id}</td><td>${it.status}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    setInterval(refresh, 1000);
+    refresh();
+
+    document.getElementById('btnStart').onclick = async () => {
+      await fetch('/start', {method:'POST'});
+      refresh();
+    };
+    document.getElementById('btnStop').onclick = async () => {
+      await fetch('/stop', {method:'POST'});
+      refresh();
+    };
+    document.getElementById('btnNext').onclick = async () => {
+      const r = await fetch('/pop-next', {method:'POST'});
+      const j = await r.json();
+      if (!j.ok) { now.textContent = j.error || "No items"; return; }
+      now.textContent = `Playing: ${j.item.name} (${j.item.id})`;
+      player.src = j.audio_url;
+      await player.play(); // requires user gesture; click counts
+      refresh();
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TalkBack - Student</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    button { font-size: 18px; padding: 10px 14px; margin-right: 8px; }
+    .hidden { display:none; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 12px 0; }
+    #status { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>TalkBack (Student)</h1>
+
+  <div class="card">
+    <label>Your name (optional): <input id="name" placeholder="e.g., Andy" /></label>
+    <p>Status: <span id="status">Checking...</span></p>
+  </div>
+
+  <div id="recordCard" class="card hidden">
+    <p><b>Question time is ON.</b> Record up to 10 seconds and submit.</p>
+    <button id="btnRecord">Record</button>
+    <button id="btnStop" disabled>Stop</button>
+    <button id="btnSubmit" disabled>Submit</button>
+    <p id="recInfo"></p>
+    <audio id="preview" controls class="hidden"></audio>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const recordCard = document.getElementById('recordCard');
+    const btnRecord = document.getElementById('btnRecord');
+    const btnStop = document.getElementById('btnStop');
+    const btnSubmit = document.getElementById('btnSubmit');
+    const recInfo = document.getElementById('recInfo');
+    const preview = document.getElementById('preview');
+    const nameEl = document.getElementById('name');
+
+    let mediaRecorder = null;
+    let chunks = [];
+    let blob = null;
+    let mimeType = "";
+
+    async function pollState() {
+      const r = await fetch('/state');
+      const s = await r.json();
+      if (s.accepting) {
+        statusEl.textContent = "Question time: ON";
+        recordCard.classList.remove('hidden');
+      } else {
+        statusEl.textContent = "Question time: OFF (wait for lecturer)";
+        recordCard.classList.add('hidden');
+      }
+    }
+
+    setInterval(pollState, 1000);
+    pollState();
+
+    btnRecord.onclick = async () => {
+      recInfo.textContent = "";
+      chunks = [];
+      blob = null;
+      preview.classList.add('hidden');
+      btnSubmit.disabled = true;
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); // permission prompt [MDN]
+      const opts = {};
+      // Let browser choose supported mimeType; many will use audio/webm;codecs=opus
+      mediaRecorder = new MediaRecorder(stream, opts);
+      mimeType = mediaRecorder.mimeType || "audio/webm";
+
+      mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        blob = new Blob(chunks, { type: mimeType });
+        preview.src = URL.createObjectURL(blob);
+        preview.classList.remove('hidden');
+        btnSubmit.disabled = false;
+      };
+
+      mediaRecorder.start();
+      btnRecord.disabled = true;
+      btnStop.disabled = false;
+
+      // auto stop after 10s
+      setTimeout(() => {
+        if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+      }, 10000);
+
+      recInfo.textContent = "Recording... (auto-stops at 10s)";
+    };
+
+    btnStop.onclick = () => {
+      if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+    };
+
+    btnSubmit.onclick = async () => {
+      if (!blob) return;
+      btnSubmit.disabled = true;
+
+      const fd = new FormData();
+      fd.append("name", nameEl.value || "Anonymous");
+      fd.append("audio", blob, "question.webm");
+
+      const r = await fetch("/upload-question", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!j.ok) {
+        recInfo.textContent = "Upload failed: " + (j.error || "unknown");
+        btnSubmit.disabled = false;
+        return;
+      }
+      recInfo.textContent = `Submitted. Queue position: ${j.position}`;
+      btnRecord.disabled = false;
+      btnStop.disabled = true;
+    };
+
+    // button states
+    setInterval(() => {
+      btnStop.disabled = !(mediaRecorder && mediaRecorder.state === "recording");
+      if (!btnStop.disabled) btnRecord.disabled = true;
+      if (btnStop.disabled && !blob) btnRecord.disabled = false;
+    }, 200);
+  </script>
+</body>
+</html>
