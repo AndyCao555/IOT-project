@@ -1,135 +1,167 @@
-# TalkBack System - IoT Project
+# TalkBack – IoT Q&A System
 
-A hardware-controlled Q&A system where lecturers use a physical microphone with buttons to manage student questions, and students submit audio questions asynchronously through a web interface.
+A hardware-controlled Q&A system. The lecturer uses a physical microphone (ESP32) with two buttons to control a digital queue. Students submit audio questions from their phones/laptops via a web app. The Raspberry Pi manages the queue and plays questions through speakers.
 
-## Quick Start
+## How It Works
 
-**For Students:** `http://PI_IP:5000/`  
-**For Lecturers:** `http://PI_IP:5000/lecturer`
+```
+ [Student Phone/Laptop]              [Raspberry Pi]              [ESP32 Mic]
+         │                                 │                          │
+         │  record & submit audio ──────►  │  ◄── Button 1 ───────── │  Start Q&A
+         │                                 │  ◄── Button 2 ───────── │  Next Question
+         │                            Queue: [Q1, Q2, Q3...]         │
+         │                                 │                          │
+         │                            Plays audio through speakers    │
+```
 
-## System Overview
-
-The TalkBack system consists of three main components:
-
-1. **ESP32 Microphone Hardware** - Physical controller with two buttons:
-   - **Start Q&A** - Opens the queue for student submissions
-   - **Next Question** - Plays the next question from the queue
-
-2. **Raspberry Pi Hub Server** - Central server that:
-   - Manages the question queue
-   - Receives audio submissions from students
-   - Plays audio through connected speakers
-   - Provides web interfaces for students and lecturers
-
-3. **Student Web App** - Browser-based interface for:
-   - Recording audio questions (up to 10 seconds)
-   - Submitting questions to the queue
-   - Viewing queue status
-
-## Features
-
-- ✅ **Hardware Control** - Physical buttons on ESP32 microphone
-- ✅ **Asynchronous Submissions** - Students can submit while lecturer is speaking
-- ✅ **Queue Management** - FIFO queue with status tracking
-- ✅ **Audio Playback** - Plays through Raspberry Pi speakers
-- ✅ **Real-time Updates** - WebSocket support for live status updates
-- ✅ **Multiple Communication Methods** - HTTP, WebSocket, or MQTT
-
-## Documentation
-
-- **[SETUP.md](SETUP.md)** - Complete setup and installation guide
-- **[hardware/esp32_mic/README.md](hardware/esp32_mic/README.md)** - Hardware setup guide
+1. Lecturer presses **Button 1** → Pi starts accepting questions
+2. Students open `http://<PI_IP>:5000/` → record and submit audio
+3. Lecturer presses **Button 2** → Pi plays next question through speakers
 
 ## Project Structure
 
 ```
 IOT-project/
-├── talkback_demo/          # Flask server application (Raspberry Pi hub)
-│   ├── app.py              # Main server code
-│   ├── requirements.txt    # Python dependencies
-│   └── templates/          # Web interfaces
-├── hardware/
-│   └── esp32_mic/         # ESP32 Arduino code
-├── testing/               # Test tools (no hardware needed)
-│   ├── simulate_hardware.py   # Interactive ESP32 button simulator
-│   ├── test_full_flow.py      # Automated end-to-end test
-│   └── requirements.txt       # Test dependencies
-├── README.md              # This file
-└── SETUP.md               # Setup guide
+├── talkback_demo/             # Raspberry Pi server
+│   ├── app.py                 # Flask app (run this)
+│   ├── requirements.txt       # Python packages
+│   └── templates/
+│       └── student.html       # Student recording page
+├── hardware/esp32_mic/        # Arduino code for ESP32
+│   ├── esp32_mic.ino
+│   └── README.md
+├── testing/                   # Test without real hardware
+│   ├── simulate_hardware.py   # Simulate ESP32 buttons
+│   └── test_full_flow.py      # Automated end-to-end test
+├── README.md
+└── SETUP.md                   # Detailed setup guide
 ```
 
-## Getting Started
+## Quick Start (Raspberry Pi)
 
-1. **Setup Raspberry Pi Server** - See [SETUP.md](SETUP.md#part-1-raspberry-pi-server-setup)
-2. **Setup ESP32 Hardware** - See [hardware/esp32_mic/README.md](hardware/esp32_mic/README.md)
-3. **Test the System** - See [Testing](#testing) below
-
-## Testing
-
-You can test the full system without any hardware using the scripts in the `testing/` folder.
-
-### Prerequisites
-
-Make sure the Flask server is running first:
+### 1. Install system packages
 
 ```bash
-source ~/talkback_venv/bin/activate
-cd IOT-project/talkback_demo
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip ffmpeg alsa-utils
+```
+
+### 2. Set up Python environment
+
+```bash
+cd IOT-project
+python3 -m venv venv
+source venv/bin/activate
+pip install -r talkback_demo/requirements.txt
+```
+
+### 3. Run the server
+
+```bash
+cd talkback_demo
 python3 app.py
 ```
 
-Then open a **second terminal** and activate the same venv:
+Server starts at `http://0.0.0.0:5000`. Students connect to `http://<PI_IP>:5000/` on the same WiFi.
+
+## Quick Start (WSL / Laptop Testing)
+
+If testing on Windows WSL (no Pi needed):
 
 ```bash
+sudo apt install -y python3-venv python3-pip
+
+# Create venv in Linux home (WSL can't make symlinks on /mnt/c)
+python3 -m venv ~/talkback_venv
 source ~/talkback_venv/bin/activate
+
+cd "/path/to/IOT-project"
+pip install -r talkback_demo/requirements.txt
+
+cd talkback_demo
+python3 app.py
+```
+
+Open `http://localhost:5000/` in your browser.
+
+## Testing Without Hardware
+
+With the server running, open a **second terminal**:
+
+```bash
+source ~/talkback_venv/bin/activate   # or: source venv/bin/activate
 pip install requests
 cd IOT-project/testing
 ```
 
-### Automated End-to-End Test
-
-Runs 17 checks through the complete Q&A flow automatically:
-
-```bash
-python3 test_full_flow.py
-```
-
-This will:
-- Start a Q&A session (simulates ESP32 Button 1)
-- Upload test audio as two different students
-- Pop and "play" each question (simulates ESP32 Button 2)
-- Verify queue management and error handling
-- Print PASS/FAIL for each step
-
-### Interactive Hardware Simulator
-
-Manually simulate pressing the ESP32 buttons in real time:
+**Interactive simulator** — manually press virtual ESP32 buttons:
 
 ```bash
 python3 simulate_hardware.py
 ```
 
-Commands:
+| Command | Action |
+|---------|--------|
+| `1` | Start Q&A (Button 1) |
+| `2` | Next question (Button 2) |
+| `3` | Stop Q&A |
+| `s` | Check status |
+| `q` | View queue |
 
-| Command       | Action                              |
-|---------------|-------------------------------------|
-| `1` / `start` | Start Q&A (ESP32 Button 1)         |
-| `2` / `next`  | Play next question (ESP32 Button 2)|
-| `3` / `stop`  | Stop Q&A session                   |
-| `s` / `status`| Check current server state         |
-| `q` / `queue` | View the question queue            |
-| `h` / `help`  | Show help                          |
-| `x` / `exit`  | Quit                               |
+**Automated test** — runs 17 checks through the full flow:
 
-Use this alongside the student web page (`http://localhost:5000/`) to record and submit real audio questions from your browser while controlling the session from the simulator.
+```bash
+python3 test_full_flow.py
+```
 
-## Requirements
+## ESP32 Hardware Setup
 
-- Raspberry Pi with Raspberry Pi OS
-- ESP32 development board
-- WiFi network
-- Speakers/headphones for audio output
-- Python 3.8+
-- Arduino IDE or PlatformIO (for ESP32)
+Flash `hardware/esp32_mic/esp32_mic.ino` using Arduino IDE.
 
-For detailed requirements and installation instructions, see [SETUP.md](SETUP.md).
+**Wiring:**
+- Button 1 (Start Q&A) → GPIO 0 → GND
+- Button 2 (Next Question) → GPIO 2 → GND
+
+**Config** — edit these lines in the `.ino` file:
+```cpp
+const char* ssid     = "YOUR_WIFI";
+const char* password = "YOUR_PASSWORD";
+const char* serverIP = "PI_IP_ADDRESS";
+```
+
+See [hardware/esp32_mic/README.md](hardware/esp32_mic/README.md) for full details.
+
+## Pi Requirements
+
+**System packages:**
+```
+python3  python3-venv  python3-pip  ffmpeg  alsa-utils
+```
+
+**Python packages** (`talkback_demo/requirements.txt`):
+```
+Flask==3.0.0
+flask-socketio==5.3.5
+python-socketio==5.10.0
+eventlet==0.33.3
+paho-mqtt==1.6.1
+Werkzeug==3.0.1
+```
+
+**Optional** (for audio playback): `vlc`, `pulseaudio`
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Student recording page |
+| GET | `/state` | Current state (JSON) |
+| POST | `/upload-question` | Submit audio (multipart form) |
+| GET | `/queue` | View queue (JSON) |
+| POST | `/hardware/start` | ESP32 Button 1 → Start Q&A |
+| POST | `/hardware/next` | ESP32 Button 2 → Next question |
+| POST | `/hardware/stop` | Stop Q&A |
+
+## Detailed Setup
+
+See [SETUP.md](SETUP.md) for full installation guide including audio config, MQTT setup, and troubleshooting.

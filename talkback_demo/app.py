@@ -45,7 +45,6 @@ def play_audio_on_pi(audio_path):
     # Convert webm to wav if needed (for aplay compatibility)
     audio_ext = os.path.splitext(audio_path)[1].lower()
     if audio_ext in ['.webm', '.ogg', '.mp3']:
-        # Try to use ffmpeg to convert to wav
         wav_path = os.path.splitext(audio_path)[0] + '.wav'
         try:
             subprocess.run(
@@ -57,7 +56,6 @@ def play_audio_on_pi(audio_path):
             audio_path = wav_path
         except (subprocess.CalledProcessError, FileNotFoundError,
                 subprocess.TimeoutExpired, PermissionError, OSError):
-            # If ffmpeg fails, try players that support webm directly
             players = [
                 ['vlc', '--intf', 'dummy', '--play-and-exit'],
                 ['paplay'],
@@ -68,11 +66,8 @@ def play_audio_on_pi(audio_path):
         try:
             cmd = player_cmd + [audio_path]
             current_playback_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            # Don't wait - let it play in background
             print(f"  Playing audio via {player_cmd[0]}: {os.path.basename(audio_path)}")
             return True
         except (FileNotFoundError, PermissionError, OSError):
@@ -81,13 +76,11 @@ def play_audio_on_pi(audio_path):
             print(f"  Error playing with {player_cmd[0]}: {e}")
             continue
     
-    # No audio player available — still report success so the queue moves forward
-    # (audio can be played via the lecturer web UI instead)
+    # No audio player available — queue still moves forward
     print(f"  No audio player found — skipping playback for: {os.path.basename(audio_path)}")
-    print(f"  (Play it from the lecturer dashboard or access /uploads/{os.path.basename(audio_path)})")
     return True
 
-# MQTT setup (if available)
+# MQTT setup (optional)
 mqtt_client = None
 if MQTT_AVAILABLE:
     def on_mqtt_connect(client, userdata, flags, rc):
@@ -100,8 +93,6 @@ if MQTT_AVAILABLE:
     
     def on_mqtt_message(client, userdata, msg):
         topic = msg.topic.decode() if isinstance(msg.topic, bytes) else msg.topic
-        payload = msg.payload.decode() if isinstance(msg.payload, bytes) else msg.payload
-        
         if topic == "talkback/mic/start":
             handle_start_qa()
         elif topic == "talkback/mic/next":
@@ -112,78 +103,58 @@ if MQTT_AVAILABLE:
         mqtt_client = mqtt.Client()
         mqtt_client.on_connect = on_mqtt_connect
         mqtt_client.on_message = on_mqtt_message
-        
-        # Try to connect (non-blocking)
         try:
             mqtt_client.connect("localhost", 1883, 60)
             mqtt_client.loop_start()
         except Exception as e:
             print(f"MQTT connection failed (will retry): {e}")
     
-    # Setup MQTT in background thread
     mqtt_thread = threading.Thread(target=setup_mqtt, daemon=True)
     mqtt_thread.start()
 
+# ── Core logic ────────────────────────────────────────────────────────
+
 def handle_start_qa():
-    """Handle Start Q&A action from hardware."""
+    """Start accepting student questions."""
     global is_accepting_questions
     is_accepting_questions = True
     socketio.emit('state_update', {'accepting': True, 'queue_len': len(queue)})
-    return {"ok": True, "accepting": is_accepting_questions}
+    return {"ok": True, "accepting": True}
+
+def handle_stop_qa():
+    """Stop accepting student questions."""
+    global is_accepting_questions
+    is_accepting_questions = False
+    socketio.emit('state_update', {'accepting': False, 'queue_len': len(queue)})
+    return {"ok": True, "accepting": False}
 
 def handle_next_question():
-    """Handle Next Question action from hardware."""
+    """Pop next question from queue and play it."""
     if not queue:
-        socketio.emit('playback_status', {'error': 'Queue empty'})
         return {"ok": False, "error": "Queue empty"}
     
     entry = queue.popleft()
     audio_path = os.path.join(UPLOAD_DIR, entry['filename'])
     
     if os.path.exists(audio_path):
-        success = play_audio_on_pi(audio_path)
-        if success:
-            socketio.emit('playback_status', {
-                'playing': True,
-                'item': entry,
-                'audio_url': f"/uploads/{entry['filename']}"
-            })
-            socketio.emit('state_update', {'accepting': is_accepting_questions, 'queue_len': len(queue)})
-            return {"ok": True, "item": entry, "playing": True}
-        else:
-            socketio.emit('playback_status', {'error': 'Failed to play audio'})
-            return {"ok": False, "error": "Failed to play audio"}
+        play_audio_on_pi(audio_path)
+        socketio.emit('state_update', {'accepting': is_accepting_questions, 'queue_len': len(queue)})
+        return {"ok": True, "item": entry, "remaining": len(queue)}
     else:
-        socketio.emit('playback_status', {'error': 'Audio file not found'})
         return {"ok": False, "error": "Audio file not found"}
+
+# ── Student page ──────────────────────────────────────────────────────
 
 @app.get("/")
 def index():
     return render_template("student.html")
 
-@app.get("/lecturer")
-def lecturer():
-    return render_template("lecturer.html")
-
 @app.get("/state")
 def state():
     return jsonify({"accepting": is_accepting_questions, "queue_len": len(queue)})
 
-@app.post("/start")
-def start():
-    result = handle_start_qa()
-    return jsonify(result)
-
-@app.post("/stop")
-def stop():
-    global is_accepting_questions
-    is_accepting_questions = False
-    socketio.emit('state_update', {'accepting': False, 'queue_len': len(queue)})
-    return jsonify({"ok": True, "accepting": is_accepting_questions})
-
 @app.post("/upload-question")
 def upload_question():
-    global is_accepting_questions
     if not is_accepting_questions:
         return jsonify({"ok": False, "error": "Not accepting questions"}), 403
 
@@ -192,7 +163,6 @@ def upload_question():
     if not f:
         return jsonify({"ok": False, "error": "Missing audio file"}), 400
 
-    # Save
     ext = os.path.splitext(secure_filename(f.filename))[1].lower() or ".webm"
     qid = str(uuid.uuid4())[:8]
     filename = f"{int(time.time())}_{qid}{ext}"
@@ -213,53 +183,50 @@ def upload_question():
 def get_queue():
     return jsonify({"accepting": is_accepting_questions, "items": list(queue)})
 
-@app.post("/pop-next")
-def pop_next():
-    result = handle_next_question()
-    if not result.get("ok"):
-        return jsonify(result), 404
-    return jsonify(result)
+# ── Hardware endpoints (ESP32 buttons) ────────────────────────────────
 
-# Hardware control endpoints (for ESP32 HTTP requests)
 @app.post("/hardware/start")
 def hardware_start():
-    """Endpoint for ESP32 hardware to trigger Start Q&A."""
-    result = handle_start_qa()
-    return jsonify(result)
+    """Button 1: Start Q&A session."""
+    return jsonify(handle_start_qa())
+
+@app.post("/hardware/stop")
+def hardware_stop():
+    """Button or command: Stop Q&A session."""
+    return jsonify(handle_stop_qa())
 
 @app.post("/hardware/next")
 def hardware_next():
-    """Endpoint for ESP32 hardware to trigger Next Question."""
+    """Button 2: Play next question."""
     result = handle_next_question()
     if not result.get("ok"):
         return jsonify(result), 404
     return jsonify(result)
 
-# WebSocket events for hardware communication
+# Keep /stop for backward compat with simulator
+@app.post("/stop")
+def stop():
+    return jsonify(handle_stop_qa())
+
+# ── WebSocket events (alternative to HTTP) ────────────────────────────
+
 @socketio.on('connect')
-def handle_connect():
-    print('Hardware client connected')
+def ws_connect():
     emit('state_update', {'accepting': is_accepting_questions, 'queue_len': len(queue)})
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Hardware client disconnected')
-
 @socketio.on('start_qa')
-def handle_start_qa_ws():
-    result = handle_start_qa()
-    emit('start_response', result)
+def ws_start_qa():
+    emit('start_response', handle_start_qa())
 
 @socketio.on('next_question')
-def handle_next_question_ws():
-    result = handle_next_question()
-    emit('next_response', result)
+def ws_next_question():
+    emit('next_response', handle_next_question())
+
+# ── Serve uploaded audio files ────────────────────────────────────────
 
 @app.get("/uploads/<path:filename>")
 def uploads(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
 if __name__ == "__main__":
-    # Run with SocketIO for WebSocket support
-    # For production, use a proper WSGI server like gunicorn with eventlet/gevent
     socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
