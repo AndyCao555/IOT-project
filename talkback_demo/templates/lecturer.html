@@ -33,15 +33,44 @@
 
   <div class="card">
     <h3>Now playing</h3>
-    <p id="now"></p>
+    <p id="now">No audio playing</p>
+    <p id="playbackStatus" style="color: #666; font-size: 14px;"></p>
     <audio id="player" controls></audio>
+    <p style="font-size: 12px; color: #888; margin-top: 8px;">
+      Note: Audio plays on Raspberry Pi speakers. Browser player shown for preview only.
+    </p>
   </div>
 
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
     const stateEl = document.getElementById('state');
     const tbody = document.getElementById('tbody');
     const player = document.getElementById('player');
     const now = document.getElementById('now');
+    const playbackStatus = document.getElementById('playbackStatus');
+    
+    // Connect to WebSocket for real-time updates
+    const socket = io();
+    
+    socket.on('state_update', (data) => {
+      stateEl.textContent = data.accepting ? "Accepting: ON" : "Accepting: OFF";
+      refresh();
+    });
+    
+    socket.on('playback_status', (data) => {
+      if (data.error) {
+        now.textContent = `Error: ${data.error}`;
+        playbackStatus.textContent = '';
+      } else if (data.playing) {
+        now.textContent = `Playing on Pi: ${data.item.name} (${data.item.id})`;
+        playbackStatus.textContent = 'Audio is playing through Raspberry Pi speakers';
+        playbackStatus.style.color = '#28a745';
+        if (data.audio_url) {
+          player.src = data.audio_url;
+        }
+        refresh();
+      }
+    });
 
     async function refresh() {
       const r = await fetch('/queue');
@@ -69,10 +98,21 @@
     document.getElementById('btnNext').onclick = async () => {
       const r = await fetch('/pop-next', {method:'POST'});
       const j = await r.json();
-      if (!j.ok) { now.textContent = j.error || "No items"; return; }
-      now.textContent = `Playing: ${j.item.name} (${j.item.id})`;
-      player.src = j.audio_url;
-      await player.play(); // requires user gesture; click counts
+      if (!j.ok) { 
+        now.textContent = j.error || "No items";
+        playbackStatus.textContent = '';
+        return; 
+      }
+      now.textContent = `Playing on Pi: ${j.item.name} (${j.item.id})`;
+      playbackStatus.textContent = j.playing ? 'Audio is playing through Raspberry Pi speakers' : 'Audio playback initiated';
+      playbackStatus.style.color = j.playing ? '#28a745' : '#ffc107';
+      if (j.audio_url) {
+        player.src = j.audio_url;
+        // Try to play in browser for preview (may fail due to autoplay restrictions)
+        player.play().catch(() => {
+          console.log('Browser autoplay prevented - audio will play on Pi only');
+        });
+      }
       refresh();
     };
   </script>
